@@ -6,12 +6,18 @@ import (
 	"time"
 )
 
-func task() {
-	fmt.Println("I am a running job.")
+func makeTask(done chan<- struct{}) func() {
+	return func() {
+		fmt.Println("I am a running job.")
+		close(done)
+	}
 }
 
-func taskWithParams(a int, b string) {
-	fmt.Println(a, b)
+func makeTaskWithParams(done chan<- struct{}) func(a int, b string) {
+	return func(a int, b string) {
+		fmt.Println(a, b)
+		close(done)
+	}
 }
 
 func assertEqualTime(name string, t *testing.T, actual, expected time.Time) {
@@ -21,12 +27,71 @@ func assertEqualTime(name string, t *testing.T, actual, expected time.Time) {
 }
 
 func TestSecond(t *testing.T) {
-	defaultScheduler.Every(1, true).Second().Do(task)
-	defaultScheduler.Every(1, true).Second().Do(taskWithParams, 1, "hello")
+	done := make(chan struct{})
+	defaultScheduler.Every(1, true).Second().Do(makeTask(done))
 	stop := defaultScheduler.Start()
-	time.Sleep(5 * time.Second)
+	timeout := time.After(5 * time.Second)
+	select {
+	case <-timeout:
+		t.Fail()
+	case <-done:
+	}
 	close(stop)
+	if err := defaultScheduler.Err(); err != nil {
+		t.Error(err)
+	}
+	defaultScheduler.Clear()
+}
 
+func TestSecondWithParams(t *testing.T) {
+	done := make(chan struct{})
+	defaultScheduler.Every(1, true).Second().Do(makeTaskWithParams(done), 1, "hello")
+	stop := defaultScheduler.Start()
+	timeout := time.After(5 * time.Second)
+	select {
+	case <-timeout:
+		t.Fail()
+	case <-done:
+	}
+	close(stop)
+	if err := defaultScheduler.Err(); err != nil {
+		t.Error(err)
+	}
+	defaultScheduler.Clear()
+}
+
+func TestSlowStart(t *testing.T) {
+	done := make(chan struct{})
+	stop := defaultScheduler.Start()
+	job := defaultScheduler.Every(1, true).Second()
+	time.Sleep(time.Second)
+	job.Do(makeTask(done))
+	timeout := time.After(5 * time.Second)
+	select {
+	case <-timeout:
+		t.Fail()
+	case <-done:
+	}
+	close(stop)
+	if err := defaultScheduler.Err(); err != nil {
+		t.Error(err)
+	}
+	defaultScheduler.Clear()
+}
+
+func TestRemove(t *testing.T) {
+	done := make(chan struct{})
+	stop := defaultScheduler.Start()
+	task := makeTask(done)
+	defaultScheduler.Every(3, true).Second().Do(task)
+	defaultScheduler.Remove(task)
+	timeout := time.After(5 * time.Second)
+	select {
+	case <-done:
+		t.Fail()
+	case <-timeout:
+	}
+	close(stop)
 	if err := defaultScheduler.Err(); err != nil {
 		t.Error(err)
 	}
