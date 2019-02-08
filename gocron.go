@@ -19,6 +19,7 @@
 package gocron
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"reflect"
@@ -239,9 +240,11 @@ func (j *Job) scheduleNextRun() error {
 
 	switch j.unit {
 	case days:
+		j.shouldDo = true
 		j.nextRun = j.roundToMidnight(j.lastRun)
 		j.nextRun = j.nextRun.Add(j.atTime)
 	case weeks:
+		j.shouldDo = true
 		j.nextRun = j.roundToMidnight(j.lastRun)
 		dayDiff := int(j.startDay)
 		dayDiff -= int(j.nextRun.Weekday())
@@ -259,7 +262,7 @@ func (j *Job) scheduleNextRun() error {
 	}
 
 	// advance to next possible schedule
-	for j.nextRun.Before(now) || j.nextRun.Before(j.lastRun) {
+	for j.nextRun.Before(now) || j.nextRun.Equal(now) || j.nextRun.Before(j.lastRun) {
 		j.shouldDo = true
 		j.nextRun = j.nextRun.Add(period)
 	}
@@ -527,6 +530,26 @@ func (s *Scheduler) Start() chan bool {
 	return stopped
 }
 
+// StartWithContext starts all pending jobs
+// It blocks until ctx is done, or the service returns an error.
+func (s *Scheduler) StartWithContext(ctx context.Context) error {
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			err := s.RunPending()
+			if err != nil {
+				s.err = err
+				return err
+			}
+		case <-ctx.Done():
+			return nil
+		}
+	}
+}
+
 // The following methods are shortcuts for not having to
 // create a Schduler instance
 var defaultScheduler = NewScheduler()
@@ -577,4 +600,9 @@ func Remove(j interface{}) {
 // NextRun gets the next running time
 func NextRun() (job *Job, time time.Time) {
 	return defaultScheduler.NextRun()
+}
+
+// Len gets the amount of jobs in the scheduler
+func Len() int {
+	return defaultScheduler.Len()
 }
